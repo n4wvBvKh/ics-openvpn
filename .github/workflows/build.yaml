@@ -28,12 +28,28 @@ jobs:
         run: |
           cp -r tunnelblick-patches/* main/src/main/cpp/openvpn/
           cd main/src/main/cpp/openvpn
-          patch -p1 --forward < 02-tunnelblick-openvpn_xorpatch-a.diff || echo "Patch A failed"
-          patch -p1 --forward < 03-tunnelblick-openvpn_xorpatch-b.diff || echo "Patch B failed"
-          patch -p1 --forward < 04-tunnelblick-openvpn_xorpatch-c.diff || echo "Patch C failed"
-          patch -p1 --forward < 05-tunnelblick-openvpn_xorpatch-d.diff || echo "Patch D failed"
-          patch -p1 --forward < 06-tunnelblick-openvpn_xorpatch-e.diff || echo "Patch E failed"
-
+          
+          echo "=== Applying Patch A ==="
+          patch -p1 --forward < 02-tunnelblick-openvpn_xorpatch-a.diff || cat src/openvpn/forward.c.rej
+          
+          echo "=== Applying Patch B ==="
+          patch -p1 --forward < 03-tunnelblick-openvpn_xorpatch-b.diff || cat src/openvpn/options.c.rej
+          
+          echo "=== Applying Patch C ==="
+          patch -p1 --forward < 04-tunnelblick-openvpn_xorpatch-c.diff || cat src/openvpn/options.h.rej
+          
+          echo "=== Applying Patch D ==="
+          patch -p1 --forward < 05-tunnelblick-openvpn_xorpatch-d.diff || cat src/openvpn/socket.c.rej
+          
+          echo "=== Applying Patch E ==="
+          patch -p1 --forward < 06-tunnelblick-openvpn_xorpatch-e.diff || cat src/openvpn/socket.h.rej
+          
+          # 如果存在 .rej 文件，说明有冲突，直接终止编译并报错
+          if ls src/openvpn/*.rej 1> /dev/null 2>&1; then
+            echo "❌ 补丁注入失败！请将上方日志中打印出的 '.rej' 内容发给 AI。"
+            exit 1
+          fi
+          
       - name: set up JDK 17
         uses: actions/setup-java@v4
         with:
