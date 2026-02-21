@@ -53,7 +53,8 @@ jobs:
           parts = sh.split('link_socket_read(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*from\s*\))', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
+              # 修复了这里的右括号截断问题
+              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*from)\s*\)', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
               body = body.replace('{', '{\n    int res;', 1)
               body = re.sub(r'int\s+res;', '', body, count=1)
               body = re.sub(r'return\s+res;', '/* return res; */', body, count=1)
@@ -66,7 +67,8 @@ jobs:
           parts = sh.split('link_socket_write(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*to\s*\))', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
+              # 修复了这里的右括号截断问题
+              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*to)\s*\)', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
               inj_w = "{ switch(xormethod) { case 0: break; case 1: buffer_mask(buf,xormask,xormasklen); break; case 2: buffer_xorptrpos(buf); break; case 3: buffer_reverse(buf); break; case 4: buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); buffer_mask(buf,xormask,xormasklen); break; default: ASSERT(0); return -1; } "
               body = body.replace('{', inj_w, 1)
               parts[1] = body
