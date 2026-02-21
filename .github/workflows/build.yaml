@@ -50,15 +50,21 @@ jobs:
           with open('src/openvpn/socket.h', 'r') as f:
               sh = f.read()
           
+          # 提前注入函数声明，防止 Clang 报错
+          decl = "\nint buffer_mask(struct buffer *buf, const char *mask, int xormasklen);\nint buffer_xorptrpos(struct buffer *buf);\nint buffer_reverse(struct buffer *buf);\n"
+          sh = decl + sh
+          
           parts = sh.split('link_socket_read(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              # 修复了这里的右括号截断问题
+              # 修复函数签名
               body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*from)\s*\)', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
+              # 剥离局部 res 变量并提升为全局作用域
+              body = re.sub(r'\{\s*int\s+res;', '{', body)
               body = body.replace('{', '{\n    int res;', 1)
-              body = re.sub(r'int\s+res;', '', body, count=1)
-              body = re.sub(r'return\s+res;', '/* return res; */', body, count=1)
-              body = re.sub(r'return\s+(link_socket_read_tcp[^;]+;)', r'res = \1', body, count=1)
+              body = re.sub(r'return\s+res;', '/* return res; */', body)
+              body = re.sub(r'return\s+(link_socket_read_tcp[^;]+;)', r'res = \1', body)
+              # 植入异或逻辑
               inj = "switch(xormethod) { case 0: break; case 1: buffer_mask(buf,xormask,xormasklen); break; case 2: buffer_xorptrpos(buf); break; case 3: buffer_reverse(buf); break; case 4: buffer_mask(buf,xormask,xormasklen); buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); break; default: ASSERT(0); return -1; } return res; }"
               body = re.sub(r'(else\s*\{\s*ASSERT\s*\(\s*0\s*\)\s*;\s*return\s+-1;\s*(?:/\*.*?\*/\s*)?\})\s*\}', r'\1' + inj, body, count=1)
               parts[1] = body
@@ -67,7 +73,6 @@ jobs:
           parts = sh.split('link_socket_write(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              # 修复了这里的右括号截断问题
               body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*to)\s*\)', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
               inj_w = "{ switch(xormethod) { case 0: break; case 1: buffer_mask(buf,xormask,xormasklen); break; case 2: buffer_xorptrpos(buf); break; case 3: buffer_reverse(buf); break; case 4: buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); buffer_mask(buf,xormask,xormasklen); break; default: ASSERT(0); return -1; } "
               body = body.replace('{', inj_w, 1)
