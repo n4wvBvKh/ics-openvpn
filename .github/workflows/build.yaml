@@ -1,7 +1,9 @@
 # The name of our workflow
 name: Build with XOR Patch
+
 permissions:
   contents: read
+
 on: 
   push:
   pull_request:
@@ -12,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-          target: [UiOvpn2]
+        target: [UiOvpn2]
     name: "Release ${{ matrix.target }}"
     runs-on: ubuntu-latest
     steps:
@@ -24,85 +26,52 @@ jobs:
         with:
           submodules: true
           
-      - name: Copy and Apply XOR patches (Surgical Injection)
+      - name: Copy and Apply XOR patches
         run: |
           cp -r tunnelblick-patches/* main/src/main/cpp/openvpn/
           cd main/src/main/cpp/openvpn
           
-          echo "=== 1. 应用无冲突的配置参数补丁 (B, C, D) ==="
-          patch -p1 --forward < 03-tunnelblick-openvpn_xorpatch-b.diff || echo "Patch B skip"
-          patch -p1 --forward < 04-tunnelblick-openvpn_xorpatch-c.diff || echo "Patch C skip"
-          patch -p1 --forward < 05-tunnelblick-openvpn_xorpatch-d.diff || echo "Patch D skip"
+          echo "=== 1. Apply configs (B, C, D) ==="
+          patch -p1 --forward < 03-tunnelblick-openvpn_xorpatch-b.diff || true
+          patch -p1 --forward < 04-tunnelblick-openvpn_xorpatch-c.diff || true
+          patch -p1 --forward < 05-tunnelblick-openvpn_xorpatch-d.diff || true
           
-          echo "=== 2. 使用 Python 脚本强行向核心注入 XOR 逻辑 (替代 A, E) ==="
+          echo "=== 2. Python Surgical Injection ==="
           cat << 'EOF' > inject_xor.py
           import re
-
-          # --- 修复 forward.c ---
+          
           with open('src/openvpn/forward.c', 'r') as f:
               fc = f.read()
-          # 拦截收包函数
-          fc = re.sub(
-              r"(status\s*=\s*link_socket_read\s*\(\s*c->c2\.link_socket,\s*&c->c2\.buf,\s*&c->c2\.from)\s*\);",
-              r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);",
-              fc
-          )
-          # 拦截发包函数
-          fc = re.sub(
-              r"(size\s*=\s*link_socket_write\s*\(\s*c->c2\.link_socket,\s*&c->c2\.to_link,\s*to_addr)\s*\);",
-              r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);",
-              fc
-          )
+          fc = re.sub(r"(status\s*=\s*link_socket_read\s*\(\s*c->c2\.link_socket,\s*&c->c2\.buf,\s*&c->c2\.from)\s*\);", r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
+          fc = re.sub(r"(size\s*=\s*link_socket_write\s*\(\s*c->c2\.link_socket,\s*&c->c2\.to_link,\s*to_addr)\s*\);", r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
           with open('src/openvpn/forward.c', 'w') as f:
               f.write(fc)
-
-          # --- 修复 socket.h ---
+          
           with open('src/openvpn/socket.h', 'r') as f:
               sh = f.read()
-
-          # 修改 link_socket_read (解密逻辑)
+          
           parts = sh.split('link_socket_read(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*from\s*\))', r'\1, int xormethod, const char *xormask, int xormasklen)', body, count=1)
+              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*from\s*\))', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
               body = body.replace('{', '{\n    int res;', 1)
               body = re.sub(r'int\s+res;', '', body, count=1)
               body = re.sub(r'return\s+res;', '/* return res; */', body, count=1)
               body = re.sub(r'return\s+(link_socket_read_tcp[^;]+;)', r'res = \1', body, count=1)
-              inj = '''
-          switch(xormethod) {
-              case 0: break;
-              case 1: buffer_mask(buf,xormask,xormasklen); break;
-              case 2: buffer_xorptrpos(buf); break;
-              case 3: buffer_reverse(buf); break;
-              case 4: buffer_mask(buf,xormask,xormasklen); buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); break;
-              default: ASSERT(0); return -1;
-          }
-          return res;
-      }'''
+              inj = "switch(xormethod) { case 0: break; case 1: buffer_mask(buf,xormask,xormasklen); break; case 2: buffer_xorptrpos(buf); break; case 3: buffer_reverse(buf); break; case 4: buffer_mask(buf,xormask,xormasklen); buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); break; default: ASSERT(0); return -1; } return res; }"
               body = re.sub(r'(else\s*\{\s*ASSERT\s*\(\s*0\s*\)\s*;\s*return\s+-1;\s*(?:/\*.*?\*/\s*)?\})\s*\}', r'\1' + inj, body, count=1)
               parts[1] = body
               sh = 'link_socket_read(struct link_socket'.join(parts)
-
-          # 修改 link_socket_write (加密逻辑)
+          
           parts = sh.split('link_socket_write(struct link_socket')
           if len(parts) > 1:
               body = parts[1]
-              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*to\s*\))', r'\1, int xormethod, const char *xormask, int xormasklen)', body, count=1)
-              inj_w = '''{
-          switch(xormethod) {
-              case 0: break;
-              case 1: buffer_mask(buf,xormask,xormasklen); break;
-              case 2: buffer_xorptrpos(buf); break;
-              case 3: buffer_reverse(buf); break;
-              case 4: buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); buffer_mask(buf,xormask,xormasklen); break;
-              default: ASSERT(0); return -1;
-          }
-      '''
+              body = re.sub(r'(\*sock,\s*struct buffer \*buf,\s*struct link_socket_actual \*to\s*\))', r"\1, int xormethod, const char *xormask, int xormasklen)", body, count=1)
+              inj_w = "{ switch(xormethod) { case 0: break; case 1: buffer_mask(buf,xormask,xormasklen); break; case 2: buffer_xorptrpos(buf); break; case 3: buffer_reverse(buf); break; case 4: buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); buffer_mask(buf,xormask,xormasklen); break; default: ASSERT(0); return -1; } "
               body = body.replace('{', inj_w, 1)
               parts[1] = body
               sh = 'link_socket_write(struct link_socket'.join(parts)
-
+          
           with open('src/openvpn/socket.h', 'w') as f:
               f.write(sh)
           EOF
