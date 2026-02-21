@@ -31,43 +31,38 @@ jobs:
           cp -r tunnelblick-patches/* main/src/main/cpp/openvpn/
           cd main/src/main/cpp/openvpn
           
-          echo "=== 1. 应用基础参数补丁 (B, C, D) ==="
+          echo "=== 1. 应用无冲突基础补丁 (B, C, D) ==="
           patch -p1 --forward < 03-tunnelblick-openvpn_xorpatch-b.diff || true
           patch -p1 --forward < 04-tunnelblick-openvpn_xorpatch-c.diff || true
           patch -p1 --forward < 05-tunnelblick-openvpn_xorpatch-d.diff || true
           
-          echo "=== 2. Python 高级包装注入 (Wrapper Method) ==="
+          echo "=== 2. Python 旁路暗道注入 (Side-Channel) ==="
           cat << 'EOF' > inject_xor.py
           import re
           
-          # 1) 替换调用端的传参 (forward.c)
+          # 1. 修改 forward.c：只让转发模块走 xor 暗道，不影响其他组件
           with open('src/openvpn/forward.c', 'r') as f:
               fc = f.read()
           
-          fc = re.sub(r"(status\s*=\s*link_socket_read\s*\(\s*c->c2\.link_socket,\s*&c->c2\.buf,\s*&c->c2\.from)\s*\);", r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
-          fc = re.sub(r"(size\s*=\s*link_socket_write\s*\(\s*c->c2\.link_socket,\s*&c->c2\.to_link,\s*to_addr)\s*\);", r"\1, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
+          fc = re.sub(r"(status\s*=\s*link_socket_read)\s*\(\s*c->c2\.link_socket,\s*&c->c2\.buf,\s*([^)]+)\s*\);", r"\1_xor(c->c2.link_socket, &c->c2.buf, \2, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
+          fc = re.sub(r"(size\s*=\s*link_socket_write)\s*\(\s*c->c2\.link_socket,\s*&c->c2\.to_link,\s*([^)]+)\s*\);", r"\1_xor(c->c2.link_socket, &c->c2.to_link, \2, c->options.ce.xormethod, c->options.ce.xormask, c->options.ce.xormasklen);", fc)
           
           with open('src/openvpn/forward.c', 'w') as f:
               f.write(fc)
           
-          # 2) 包装底层函数 (socket.h)
+          # 2. 在 socket.h 底部追加我们独立无害的 xor 函数
           with open('src/openvpn/socket.h', 'r') as f:
               sh = f.read()
           
-          # 把原来的收发函数重命名为 _ORIG，完全不破坏其内部结构
-          sh = re.sub(r'\blink_socket_read\s*\(\s*struct link_socket', 'link_socket_read_ORIG(struct link_socket', sh)
-          sh = re.sub(r'\blink_socket_write\s*\(\s*struct link_socket', 'link_socket_write_ORIG(struct link_socket', sh)
-          
-          # 制作全新的混淆外壳函数
           wrappers = """
-          void buffer_mask(struct buffer *buf, const char *mask, int xormasklen);
-          void buffer_xorptrpos(struct buffer *buf);
-          void buffer_reverse(struct buffer *buf);
+          int buffer_mask(struct buffer *buf, const char *mask, int xormasklen);
+          int buffer_xorptrpos(struct buffer *buf);
+          int buffer_reverse(struct buffer *buf);
           
           static inline int
-          link_socket_read(struct link_socket *sock, struct buffer *buf, struct link_socket_actual *from, int xormethod, const char *xormask, int xormasklen)
+          link_socket_read_xor(struct link_socket *sock, struct buffer *buf, struct link_socket_actual *from, int xormethod, const char *xormask, int xormasklen)
           {
-              int res = link_socket_read_ORIG(sock, buf, from);
+              int res = link_socket_read(sock, buf, from);
               switch(xormethod) {
                   case 0: break;
                   case 1: buffer_mask(buf,xormask,xormasklen); break;
@@ -79,7 +74,7 @@ jobs:
           }
           
           static inline int
-          link_socket_write(struct link_socket *sock, struct buffer *buf, struct link_socket_actual *to, int xormethod, const char *xormask, int xormasklen)
+          link_socket_write_xor(struct link_socket *sock, struct buffer *buf, struct link_socket_actual *to, int xormethod, const char *xormask, int xormasklen)
           {
               switch(xormethod) {
                   case 0: break;
@@ -88,17 +83,17 @@ jobs:
                   case 3: buffer_reverse(buf); break;
                   case 4: buffer_xorptrpos(buf); buffer_reverse(buf); buffer_xorptrpos(buf); buffer_mask(buf,xormask,xormasklen); break;
               }
-              return link_socket_write_ORIG(sock, buf, to);
+              return link_socket_write(sock, buf, to);
           }
           """
           
-          # 将外壳函数安全地放到文件最底部
+          # 安全地将代码放在 #endif 前
           last_endif = sh.rfind('#endif')
           if last_endif != -1:
               sh = sh[:last_endif] + wrappers + "\\n" + sh[last_endif:]
           else:
               sh += wrappers
-          
+              
           with open('src/openvpn/socket.h', 'w') as f:
               f.write(sh)
           EOF
@@ -115,7 +110,7 @@ jobs:
         uses: android-actions/setup-android@v3
         
       - name: Build the app
-        run: ./gradlew assemble${{ matrix.target }}Release --stacktrace
+        run: ./gradlew assemble${{ matrix.target }}Release
 
       - name: Archive apk artifact
         uses: actions/upload-artifact@v4
