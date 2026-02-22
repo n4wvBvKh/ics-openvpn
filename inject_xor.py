@@ -74,6 +74,8 @@ def mod_forward_c(c):
     if "buffer_mask" not in c:
         xor_funcs = """
 /* XOR Patch Helper Functions injected by script */
+#include "buffer.h"
+
 static void buffer_mask(struct buffer *buf, const char *mask, int xormasklen) {
     int i; uint8_t *b;
     if (xormasklen > 0) { for (i = 0, b = BPTR(buf); i < BLEN(buf); i++, b++) { *b = *b ^ mask[i % xormasklen]; } }
@@ -90,10 +92,10 @@ static void buffer_reverse(struct buffer *buf) {
     }
 }
 """     
-        # 1. 把混淆函数放在 forward.c 文件头部 include 的下方
+        # 1. 注入辅助函数，并手动 #include "buffer.h" 确保 struct buffer 宏正常工作！
         c = re.sub(r'(#include "syshead\.h")', r'\1\n' + xor_funcs, c, count=1)
         
-        # 2. 收到包后的瞬间直接解密（正则匹配读取指令并紧跟解密逻辑）
+        # 2. 收到包后的瞬间直接解密（正则完美兼容带空格和换行的语法）
         read_inject = """
     if (status > 0) {
         switch(c->options.ce.xormethod) {
@@ -113,7 +115,7 @@ static void buffer_reverse(struct buffer *buf) {
             c, count=1
         )
         
-        # 3. 发送包前的瞬间直接加密（正则匹配发包指令并在前面安插加密逻辑）
+        # 3. 发送包前的瞬间直接加密
         write_inject = """
                 switch(c->options.ce.xormethod) {
                     case 1: buffer_mask(&c->c2.to_link, c->options.ce.xormask, c->options.ce.xormasklen); break;
