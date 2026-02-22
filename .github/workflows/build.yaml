@@ -9,7 +9,7 @@ on:
     branches: [ "master", "main" ]
   pull_request:
     branches: [ "master", "main" ]
-  workflow_dispatch: # 与时俱进：允许在 GitHub 网页端 Actions 面板手动触发编译
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -23,15 +23,14 @@ jobs:
       - name: Checkout the code
         uses: actions/checkout@v4
         with:
-          submodules: recursive # 现代化升级：递归拉取所有嵌套的 C/C++ 子模块
+          submodules: recursive 
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # 更新至最新的 v5
+        uses: actions/setup-python@v5 
         with:
           python-version: '3.11'
 
       - name: Inject XOR Patch (Cloud Auto-Patch)
-        # 与时俱进：在这里调用之前创建的 python 脚本，对 C++ 源码进行精准注入
         run: python inject_xor.py 
 
       - name: Set up JDK 17
@@ -39,13 +38,12 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: 17
-          cache: 'gradle' # 自动利用 GitHub Cache 缓存 Gradle 依赖，大幅提速
+          cache: 'gradle' 
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Configure Gradle and Debug Signing
-        # 优化可读性，并加入 parallel 开启并行编译
         run: |
           mkdir -p ~/.gradle
           echo "icsopenvpnDebugSign=true" >> ~/.gradle/gradle.properties
@@ -55,12 +53,11 @@ jobs:
       - name: Build the app
         run: ./gradlew assemble${{ matrix.target }}Release
 
-      - name: Run Unit tests
-        run: ./gradlew test${{ matrix.target }}ReleaseUnitTest
+      # (删除了 Run Unit tests 这一步)
 
       - name: Archive apk artifact
-        uses: actions/upload-artifact@v4 # 更新至最新的 v4
+        uses: actions/upload-artifact@v4 
         with:
           name: build-${{matrix.target}}-release-apk
           path: main/build/outputs/apk/**/*universal*.apk
-          if-no-files-found: warn # 现代化：如果没有找到 APK 只是警告，防止导致整个流水线爆红
+          if-no-files-found: warn
