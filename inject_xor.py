@@ -60,8 +60,15 @@ add_scramble = """
 
 def mod_options_c(c):
     c = re.sub(r'(o->proto_force\s*=\s*-1;)', r'\1\n    o->ce.xormethod = 0;\n    o->ce.xormask = "\\0";\n    o->ce.xormasklen = 0;', c, count=1)
-    # 取消了对 setenv 的注入，因为这是导致 NDK C 编译器报错的根源，且混淆特性根本不需要向环境变量暴露密码
-    c = re.sub(r'(else if\s*\(\s*streq\s*\(\s*p\[0\],\s*"socks-proxy"\s*\)\s*\))', add_scramble.strip() + r'\n    \1', c, count=1)
+    
+    # 🚀 改进点在这里：使用绝对不会被禁用的核心参数（如 remote 或 dev）作为注入锚点
+    hooks = ["remote", "dev", "keepalive", "ping", "proto", "cipher"]
+    for hook in hooks:
+        pattern = r'(else if\s*\(\s*streq\s*\(\s*p\[0\],\s*"' + hook + r'"\s*\))'
+        if re.search(pattern, c):
+            c = re.sub(pattern, add_scramble.strip() + r'\n    \1', c, count=1)
+            return c
+            
     return c
 
 # ================= 3. 修改 forward.c =================
@@ -84,12 +91,10 @@ static void buffer_reverse(struct buffer *buf) {
     }
 }
 """     
-    # 1. 极其安全的插入位置：寻找整个文件最后一个 #include，将辅助函数紧跟其后插入，确保所有依赖类型都已加载！
     last_inc = c.rfind('#include')
     end_of_inc = c.find('\n', last_inc)
     c = c[:end_of_inc] + "\n\n" + xor_funcs + c[end_of_inc:]
     
-    # 2. 收到包后的瞬间解密 (移除对 status 变量的依赖，改用更安全的 buf.len 检查)
     read_inject = """
     if (c->c2.buf.len > 0) {
         switch(c->options.ce.xormethod) {
@@ -105,7 +110,6 @@ static void buffer_reverse(struct buffer *buf) {
 """
     c = re.sub(r'(status\s*=\s*link_socket_read\s*\([^;]+;)', r'\1\n' + read_inject, c, count=1)
     
-    # 3. 发送包前的瞬间加密
     write_inject = """
                 switch(c->options.ce.xormethod) {
                     case 1: buffer_mask(&c->c2.to_link, c->options.ce.xormask, c->options.ce.xormasklen); break;
